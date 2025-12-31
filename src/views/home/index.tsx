@@ -28,7 +28,7 @@ export const HomeView: FC = () => {
           {/* Fake “feed card” top bar inside the phone */}
           <div className="flex items-center justify-between px-3 py-2 text-[10px] text-slate-400">
             <span className="rounded-full bg-white/5 px-2 py-1 text-[9px] uppercase tracking-wide">
-              Scrolly Game
+              Marble Vortex
             </span>
             <span className="text-[9px] opacity-70">#NoCodeJam</span>
           </div>
@@ -74,6 +74,7 @@ const GameSandbox: FC = () => {
   const [score, setScore] = useState(0);
   const [highScore, setHighScore] = useState(0);
   const [combo, setCombo] = useState(0);
+  const [isMusicOn, setIsMusicOn] = useState(true);
   const [isSfxOn, setIsSfxOn] = useState(true);
   const [state, setState] = useState<"menu" | "play" | "over">("menu");
 
@@ -98,6 +99,8 @@ const GameSandbox: FC = () => {
   const incomingMarbles = useRef<Color[]>([]);
   const comboTimeoutRef = useRef<any>(null);
   const comboRef = useRef(0);
+  const musicRef = useRef<HTMLAudioElement | null>(null);
+  const audioCtx = useRef<AudioContext | null>(null);
 
   // Derived speed: increases with level
   const speed = BASE_SPEED + (level - 1) * 0.001;
@@ -204,9 +207,98 @@ const GameSandbox: FC = () => {
     };
   }, []);
 
-  /* ---------- SFX HELPER ---------- */
-  const playSfx = (type: 'shoot' | 'hit' | 'combo' | 'gameover' | 'levelup' | 'click') => {
+  /* ---------- AUDIO CONTEXT ---------- */
+  useEffect(() => {
+    const AudioContext = window.AudioContext || (window as any).webkitAudioContext;
+    if (AudioContext) {
+      audioCtx.current = new AudioContext();
+    }
+  }, []);
+
+  /* ---------- BACKGROUND MUSIC ---------- */
+  useEffect(() => {
+    const audio = new Audio('/music.mp3.wav');
+    audio.loop = true;
+    audio.volume = 0.4; // Lower volume for background music
+
+    const handleEnded = () => {
+      audio.currentTime = 0;
+      audio.play().catch(() => {});
+    };
+    audio.addEventListener('ended', handleEnded);
+
+    musicRef.current = audio;
+
+    return () => {
+      audio.removeEventListener('ended', handleEnded);
+      audio.pause();
+      musicRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!musicRef.current) return;
+    if (isMusicOn) {
+      musicRef.current.play().catch((e) => console.warn("Music autoplay blocked:", e));
+    } else {
+      musicRef.current.pause();
+    }
+  }, [isMusicOn]);
+
+  /* ---------- SOUND HELPER ---------- */
+  const playSound = (type: 'shoot' | 'hit' | 'combo' | 'gameover' | 'levelup' | 'click') => {
     if (!isSfxOn || typeof window === 'undefined') return;
+
+    // Synthesize 'shoot' sound (Pew!)
+    if (type === 'shoot' && audioCtx.current) {
+      const ctx = audioCtx.current;
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.type = 'triangle';
+      const freq = 600 + Math.random() * 100;
+      osc.frequency.setValueAtTime(freq, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(100, ctx.currentTime + 0.15);
+      
+      gain.gain.setValueAtTime(0.15, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+      
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+      return;
+    }
+
+    // Synthesize 'combo' sound (Chime!)
+    if (type === 'combo' && audioCtx.current) {
+      const ctx = audioCtx.current;
+      if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+      
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      osc.type = 'sine';
+      // C Major Arpeggio: C5, E5, G5, C6, E6, G6, C7
+      const freqs = [523.25, 659.25, 783.99, 1046.50, 1318.51, 1567.98, 2093.00];
+      const idx = Math.min(Math.max(0, comboRef.current - 1), freqs.length - 1);
+      osc.frequency.setValueAtTime(freqs[idx], ctx.currentTime);
+      
+      gain.gain.setValueAtTime(0, ctx.currentTime);
+      gain.gain.linearRampToValueAtTime(0.2, ctx.currentTime + 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.6);
+      
+      osc.start();
+      osc.stop(ctx.currentTime + 0.6);
+      return;
+    }
+
     const files = {
       shoot: '/shoot.mp3',
       hit: '/hit.mp3',
@@ -219,6 +311,7 @@ const GameSandbox: FC = () => {
     audio.volume = 1.0;
 
     // Zuma-like Pitch Scaling
+    // Marble Vortex-like Pitch Scaling
     // Use ref to get fresh combo count even inside closures
     if (type === 'combo' || (type === 'hit' && comboRef.current > 0)) {
        // Pitch rises with combo count (cap at 2.0x speed/pitch)
@@ -228,12 +321,9 @@ const GameSandbox: FC = () => {
        if (audio.preservesPitch !== undefined) audio.preservesPitch = false;
        // @ts-ignore
        if (audio.mozPreservesPitch !== undefined) audio.mozPreservesPitch = false;
-    } else if (type === 'shoot') {
-       // Slight organic variation
-       audio.playbackRate = 0.95 + Math.random() * 0.1;
     }
 
-    audio.play().catch((e) => console.warn("SFX failed:", e));
+    audio.play().catch((e) => console.warn("Sound failed:", e));
   };
 
   const startLevel = (lvl: number) => {
@@ -241,6 +331,11 @@ const GameSandbox: FC = () => {
     setScore(0);
     setCombo(0);
     comboRef.current = 0;
+
+    if (isMusicOn && musicRef.current?.paused) {
+      musicRef.current.play().catch((e) => console.warn("Music play failed:", e));
+    }
+
     if (comboTimeoutRef.current) clearTimeout(comboTimeoutRef.current);
     setState("play");
     setProjectile(null);
@@ -271,7 +366,7 @@ const GameSandbox: FC = () => {
     // If cleared all marbles and we have score (meaning we played), level up
     if (state === "play" && marbles.length === 0 && incomingMarbles.current.length === 0 && score > 0) {
       setLevel((l) => l + 1);
-      playSfx('levelup');
+      playSound('levelup');
     }
   }, [marbles, state, score]);
 
@@ -354,7 +449,7 @@ const GameSandbox: FC = () => {
             setCombo(newCombo);
             comboRef.current = newCombo;
             
-            playSfx('combo');
+            playSound('combo');
 
             if (comboTimeoutRef.current) clearTimeout(comboTimeoutRef.current);
             comboTimeoutRef.current = setTimeout(() => {
@@ -454,13 +549,15 @@ const GameSandbox: FC = () => {
           setCombo(newCombo);
           comboRef.current = newCombo;
 
-          playSfx('hit');
+          playSound('hit');
 
           if (comboTimeoutRef.current) clearTimeout(comboTimeoutRef.current);
           comboTimeoutRef.current = setTimeout(() => {
             setCombo(0);
             comboRef.current = 0;
           }, 5000);
+        } else {
+          playSound('click');
         }
 
         setMarbles(result.chain);
@@ -474,7 +571,7 @@ const GameSandbox: FC = () => {
   useEffect(() => {
     if (state === 'play' && marbles.some((m) => m.t <= 0)) {
       setState("over");
-      playSfx('gameover');
+      playSound('gameover');
     }
   }, [marbles, state]);
 
@@ -487,7 +584,7 @@ const GameSandbox: FC = () => {
     const dy = clientY - rect.top - CENTER_Y;
     const mag = Math.hypot(dx, dy);
 
-    playSfx('shoot');
+    playSound('shoot');
 
     setProjectile({
       x: CENTER_X,
@@ -587,12 +684,24 @@ const GameSandbox: FC = () => {
         <div className="absolute top-24 left-0 w-full flex justify-center gap-2 z-30 pointer-events-none">
            <button 
              className="pointer-events-auto bg-[#805b15] border-x border-b border-[#4a3308] text-amber-200 hover:text-white px-4 py-1.5 rounded-b-xl text-[10px] font-bold shadow-xl flex items-center gap-2 transition-all hover:pt-2"
-             onClick={() => {
-               playSfx('click');
+             onClick={(e) => {
+               e.stopPropagation();
+               playSound('click');
+               setIsMusicOn(!isMusicOn);
+             }}
+           >
+             <span>{isMusicOn ? 'MUSIC' : 'MUSIC'}</span>
+             <span className="text-base">{isMusicOn ? '🎵' : '🔇'}</span>
+           </button>
+           <button 
+             className="pointer-events-auto bg-[#805b15] border-x border-b border-[#4a3308] text-amber-200 hover:text-white px-4 py-1.5 rounded-b-xl text-[10px] font-bold shadow-xl flex items-center gap-2 transition-all hover:pt-2"
+             onClick={(e) => {
+               e.stopPropagation();
+               playSound('click');
                setIsSfxOn(!isSfxOn);
              }}
            >
-             <span>{isSfxOn ? 'SFX ON' : 'SFX OFF'}</span>
+             <span>{isSfxOn ? 'SFX' : 'SFX'}</span>
              <span className="text-base">{isSfxOn ? '🔊' : '🔇'}</span>
            </button>
         </div>
@@ -757,8 +866,8 @@ const GameSandbox: FC = () => {
       {state === "menu" && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-between py-24 pointer-events-none bg-black/40 backdrop-blur-[2px]">
           <div className="mt-8">
-            <h1 className="text-6xl font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-400 to-orange-600 drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] tracking-tighter">
-              ZUMA
+            <h1 className="text-5xl font-black text-transparent bg-clip-text bg-gradient-to-b from-yellow-400 to-orange-600 drop-shadow-[0_4px_4px_rgba(0,0,0,0.5)] tracking-tighter text-center">
+              Marble Vortex
             </h1>
           </div>
           
@@ -766,7 +875,7 @@ const GameSandbox: FC = () => {
              <button 
                 className="px-10 py-4 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-bold text-2xl rounded-full shadow-[0_0_20px_rgba(34,197,94,0.6)] border-4 border-green-400 hover:scale-105 active:scale-95 transition-transform"
                 onClick={() => {
-                  playSfx('click');
+                  playSound('click');
                   startLevel(1);
                 }}
              >
@@ -783,7 +892,7 @@ const GameSandbox: FC = () => {
           <button
             className="px-6 py-2 bg-yellow-500 text-black font-bold rounded-full"
             onClick={() => {
-              playSfx('click');
+              playSound('click');
               startLevel(level);
             }}
           >
